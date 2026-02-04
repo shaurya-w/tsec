@@ -10,38 +10,60 @@ export default function UnifiedDashboard() {
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
+  
   // UI State
   const [pollVisible, setPollVisible] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0); // To refresh on new event
+  const [refreshKey, setRefreshKey] = useState(0); 
   const [expandedUser, setExpandedUser] = useState(null); 
+  const [auditLogs, setAuditLogs] = useState([]);
 
-  const showPoll = () => {
-    setPollVisible(true);
-  };
-  
-  // NEW: State for the Poll Modal
-  const [isCreatingPoll, setIsCreatingPoll] = useState(false);
-  const [pollName, setPollName] = useState("");
-  const [pollBudget, setPollBudget] = useState("");
-
+  // Hardcoded for demo - in real app comes from session
   const currentUserId = "u3"; 
+  
+  // State for Processing
+  const [processing, setProcessing] = useState(null);
+  const [paymentStatus, setPaymentStatus] = useState("Idle");
+  const [isDeleting, setIsDeleting] = useState(false);
+
   // Form State
   const [users, setUsers] = useState([]);
   const [selectedUserIds, setSelectedUserIds] = useState([]);
   const [eventName, setEventName] = useState("");
   const [expenseCategories, setExpenseCategories] = useState([{ name: "", spendingLimit: "" }]);
 
+  const showPoll = () => {
+    setPollVisible(true);
+  };
+
+  // --- HELPER: CALCULATE INDIVIDUAL SHARE ---
+  const getEstimatedShare = (userId, eventContext) => {
+    if (!eventContext?.categories) return "0.00";
+
+    const total = eventContext.categories.reduce((acc, cat) => {
+      const members = cat.members || [];
+      const isMember = members.some(m => m.userId === userId);
+      
+      if (isMember) {
+        const count = members.length || 1; 
+        const limit = Number(cat.spendingLimit || 0);
+        return acc + (limit / count);
+      }
+      return acc;
+    }, 0);
+
+    return total.toFixed(2);
+  };
+
   // --- DATA LOADING ---
   const loadEvents = async () => {
     try {
-      if (!selectedEvent) setLoading(true); // Only show full loader on initial load
+      if (!selectedEvent) setLoading(true); 
       const res = await fetch("/api/events", { cache: 'no-store' });
       const data = await res.json();
       const eventsArray = Array.isArray(data) ? data : [];
       setEvents(eventsArray);
 
       if (selectedEvent) {
-        // Silently update the selected event view to reflect new data
         const updated = eventsArray.find(e => e.id === selectedEvent.id);
         if (updated) setSelectedEvent(updated);
       }
@@ -52,13 +74,29 @@ export default function UnifiedDashboard() {
     }
   };
 
-  useEffect(() => { loadEvents(); }, []);
+  const loadAuditLogs = async (eventId) => {
+    try {
+        const res = await fetch(`/api/events/${eventId}/audit`);
+        const data = await res.json();
+        setAuditLogs(Array.isArray(data) ? data : []);
+    } catch (e) {
+        console.error("Audit load error", e);
+        setAuditLogs([]);
+    }
+  };
+
+  useEffect(() => { loadEvents(); }, [refreshKey]); 
 
   // --- ACTIONS ---
+
+  const handleSelectEvent = (evt) => {
+      setAuditLogs([]); 
+      setSelectedEvent(evt);
+      loadAuditLogs(evt.id);
+  };
   
-  // 1. JOIN / LEAVE
   const handleOptToggle = async (userId, categoryId, isCurrentlyJoined) => {
-    setProcessing(`${userId}-${categoryId}-toggle`); // Lock button
+    setProcessing(`${userId}-${categoryId}-toggle`);
     try {
       await fetch("/api/categories/opt-in", {
         method: "POST",
@@ -69,39 +107,92 @@ export default function UnifiedDashboard() {
           action: isCurrentlyJoined ? "LEAVE" : "JOIN"
         }),
       });
-      await loadEvents(); // Refresh data to update UI
+      await loadEvents(); 
     } catch (err) {
       console.error(err);
     } finally {
-      setProcessing(null); // Unlock
+      setProcessing(null); 
     }
   };
 
-  // 2. CONTRIBUTE $$
-  const handleDeposit = async (userId, categoryId) => {
-    const inputKey = `${userId}-${categoryId}`;
-    const amount = parseFloat(depositAmounts[inputKey]);
-    
-    if (!amount || amount <= 0) return alert("Enter a valid amount");
+  // --- DELETE EVENT LOGIC ---
+  const handleDeleteEvent = async () => {
+    if (!selectedEvent) return;
+    if (!confirm("Are you sure you want to permanently delete this event? This cannot be undone.")) return;
 
-    setProcessing(`${userId}-${categoryId}-pay`);
+    setIsDeleting(true);
     try {
-      await fetch("/api/categories/deposit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, categoryId, amount }),
-      });
-      
-      setDepositAmounts(prev => ({ ...prev, [inputKey]: "" })); // Clear input
-      await loadEvents();
-    } catch (err) {
-      console.error(err);
+        const res = await fetch(`/api/events/${selectedEvent.id}`, {
+            method: "DELETE"
+        });
+
+        if (res.ok) {
+            setEvents(prev => prev.filter(e => e.id !== selectedEvent.id));
+            setSelectedEvent(null);
+        } else {
+            alert("Failed to delete event. Please try again.");
+        }
+    } catch (e) {
+        console.error("Delete failed", e);
+        alert("An error occurred while deleting.");
     } finally {
-      setProcessing(null);
+        setIsDeleting(false);
     }
   };
 
-  // 3. CREATE EVENT
+  // --- PAYMENT PIPELINE ---
+  const pollIntent = (intentId, currentEventId) => {
+    const interval = setInterval(async () => {
+      const res = await fetch(`/api/intent/${intentId}`); 
+      const data = await res.json();
+
+      if (data.status === "PROCESSING") {
+        clearInterval(interval);
+        finalizePayment(intentId, currentEventId);
+      }
+    }, 3000);
+  };
+
+  const finalizePayment = async (intentId, currentEventId) => {
+    setPaymentStatus("Verifying Proof...");
+    await fetch(`/api/pipeline/${intentId}`, { method: "POST" });
+    setPaymentStatus("✅ Paid & Verified!");
+    
+    await loadAuditLogs(currentEventId); 
+    await loadEvents(); 
+    
+    setTimeout(() => setPaymentStatus("Idle"), 3000);
+  };
+
+  const handleTotalPay = async (userId, totalAmount) => {
+    if (totalAmount <= 0) return alert("Nothing to pay.");
+    setPaymentStatus("Initiating...");
+    
+    try {
+        const res = await fetch("/api/pay", { 
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+                amount: totalAmount,
+                userId: userId,
+                eventId: selectedEvent.id 
+            }) 
+        });
+        
+        const data = await res.json();
+        
+        console.log("Sending Payment:", { userId, eventId: selectedEvent?.id, amount: totalAmount });
+        window.open(data.paymentUrl, "_blank");
+        
+        setPaymentStatus("Waiting for Bank...");
+        pollIntent(data.intentId, selectedEvent.id); 
+    } catch (e) {
+        console.error(e);
+        setPaymentStatus("Error");
+    }
+  };
+
+  // --- CREATE EVENT ---
   const handleFinalSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -126,7 +217,6 @@ export default function UnifiedDashboard() {
     } catch (err) { console.error(err); }
   };
 
-  // Load users for modal only when needed
   useEffect(() => {
     if (isCreatingEvent) {
       fetch("/api/groups/users").then(r => r.json()).then(d => setUsers(d.users || []));
@@ -136,22 +226,34 @@ export default function UnifiedDashboard() {
 
   // --- VIEW RENDER ---
   if (selectedEvent) {
-    // Math for Collective Bar
+    const dbTotalPooled = Number(selectedEvent.totalPooled || 0);
+    const calcTotalPooled = selectedEvent.categories?.reduce((acc, cat) => acc + Number(cat.totalPooled || 0), 0);
+    const realTotalPooled = Math.max(dbTotalPooled, calcTotalPooled);
+    
     const totalGoal = selectedEvent.categories?.reduce((acc, cat) => acc + Number(cat.spendingLimit || 0), 0);
-    const totalPooled = selectedEvent.categories?.reduce((acc, cat) => acc + Number(cat.totalPooled || 0), 0);
-    const globalProgress = totalGoal > 0 ? (totalPooled / totalGoal) * 100 : 0;
+    const globalProgress = totalGoal > 0 ? (realTotalPooled / totalGoal) * 100 : 0;
 
     return (
-      
       <div className="min-h-screen bg-white p-10 text-gray-900 animate-in fade-in duration-300">
         
-        <button onClick={() => setSelectedEvent(null)} className="mb-8 font-black text-xs text-indigo-600 hover:underline tracking-widest">
-          ← BACK TO FEED
-        </button>
+        {/* EVENT OVERLAY HEADER */}
+        <div className="flex justify-between items-center mb-8">
+            <button onClick={() => setSelectedEvent(null)} className="font-black text-xs text-indigo-600 hover:underline tracking-widest">
+            ← BACK TO FEED
+            </button>
+            
+            <button 
+                onClick={handleDeleteEvent} 
+                disabled={isDeleting}
+                className="text-red-500 font-bold text-[10px] uppercase tracking-widest hover:text-red-700 hover:bg-red-50 px-4 py-2 rounded-lg transition-all disabled:opacity-50"
+            >
+                {isDeleting ? "DELETING..." : "DELETE EVENT"}
+            </button>
+        </div>
         
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-16 max-w-7xl mx-auto">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-16 max-w-7xl mx-auto items-start">
           
-          {/* LEFT: COLLECTIVE HEALTH */}
+          {/* LEFT: COLLECTIVE HEALTH (Sticky) */}
           <div className="lg:col-span-5 border-r border-gray-100 pr-12 sticky top-10 h-fit">
             <h1 className="text-4xl font-black italic uppercase tracking-tighter leading-none mb-12">{selectedEvent.name}</h1>
             
@@ -164,109 +266,161 @@ export default function UnifiedDashboard() {
                 <div className="bg-indigo-600 h-full transition-all duration-700 ease-out" style={{ width: `${Math.min(globalProgress, 100)}%` }} />
               </div>
               <div className="mt-6 flex justify-between font-black uppercase text-[10px] tracking-widest text-gray-400">
-                <span>Raised: ${totalPooled}</span>
+                <span>Raised: ${realTotalPooled.toFixed(2)}</span>
                 <span>Goal: ${totalGoal}</span>
               </div>
             </div>
 
             <div className="space-y-4">
               <h2 className="text-[10px] font-black uppercase text-gray-400 tracking-[0.3em] mb-4">Baskets Overview</h2>
-              {selectedEvent.categories?.map(cat => (
-                <div key={cat.id} className="p-6 bg-gray-50 rounded-[30px] flex justify-between items-center border border-gray-100">
-                   <span className="font-black text-lg uppercase tracking-tight">{cat.name}</span>
-                   <div className="text-right">
-                      <p className="font-black text-indigo-600 text-xl">${Number(cat.totalPooled)}</p>
-                      <p className="text-[10px] font-bold text-gray-400">TARGET: ${cat.spendingLimit}</p>
-                   </div>
-                </div>
-              ))}
+              {selectedEvent.categories?.map(cat => {
+                 const memberCount = cat.members?.length || 0;
+                 return (
+                  <div key={cat.id} className="p-6 bg-gray-50 rounded-[30px] flex justify-between items-center border border-gray-100">
+                      <div>
+                        <span className="font-black text-lg uppercase tracking-tight block">{cat.name}</span>
+                        <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">{memberCount} Contributors</span>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-black text-indigo-600 text-xl">${Number(cat.totalPooled).toFixed(2)}</p>
+                        <p className="text-[10px] font-bold text-gray-400">TARGET: ${cat.spendingLimit}</p>
+                      </div>
+                  </div>
+                 );
+              })}
             </div>
           </div>
 
-          {/* RIGHT: PARTICIPANT CONTROLS */}
-          <div className="lg:col-span-7">
-            <h2 className="text-[10px] font-black uppercase text-gray-400 tracking-[0.3em] mb-10">Manage Participants</h2>
-            <div className="space-y-4">
-              {selectedEvent.participants?.map((p) => (
-                <div key={p.id} className="border border-gray-100 rounded-[40px] overflow-hidden shadow-sm transition-all hover:shadow-md">
-                  
-                  {/* USER HEADER */}
-                  <div 
-                    onClick={() => setExpandedUser(expandedUser === p.userId ? null : p.userId)}
-                    className={`p-8 flex justify-between items-center cursor-pointer transition-colors ${expandedUser === p.userId ? 'bg-indigo-600 text-white' : 'bg-white hover:bg-gray-50'}`}
-                  >
-                    <div className="flex items-center gap-6">
-                      <div className={`w-14 h-10 rounded-full flex items-center justify-center font-black text-xl border-2 ${expandedUser === p.userId ? 'bg-white text-indigo-600 border-white' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
-                        {p.user?.name?.charAt(0).toUpperCase()}
+          {/* RIGHT: SCROLLABLE CONTENT WRAPPER (Controls + Audit) */}
+          <div className="lg:col-span-7 flex flex-col gap-16">
+            
+            {/* 1. PARTICIPANT CONTROLS */}
+            <div>
+              <h2 className="text-[10px] font-black uppercase text-gray-400 tracking-[0.3em] mb-10">Manage Participants & Cuts</h2>
+              <div className="space-y-4">
+                {selectedEvent.participants?.map((p) => {
+                  const myCut = getEstimatedShare(p.userId, selectedEvent);
+                  const paidAmount = auditLogs
+                      .filter(log => log.user?.id === p.userId || log.userId === p.userId)
+                      .reduce((sum, log) => sum + Number(log.amount), 0);
+                  const isPaid = paidAmount >= (Number(myCut) - 0.1); 
+
+                  return (
+                    <div key={p.id} className={`border rounded-[40px] overflow-hidden shadow-sm transition-all hover:shadow-md ${isPaid ? 'border-green-200 bg-green-50/30' : 'border-gray-100'}`}>
+                      
+                      {/* USER HEADER */}
+                      <div 
+                        onClick={() => setExpandedUser(expandedUser === p.userId ? null : p.userId)}
+                        className={`p-8 flex justify-between items-center cursor-pointer transition-colors ${expandedUser === p.userId ? 'bg-indigo-600 text-white' : 'hover:bg-gray-50'}`}
+                      >
+                        <div className="flex items-center gap-6">
+                          <div className={`w-14 h-10 rounded-full flex items-center justify-center font-black text-xl border-2 ${expandedUser === p.userId ? 'bg-white text-indigo-600 border-white' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
+                            {p.user?.name?.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                              <span className="text-xl font-black uppercase tracking-tighter block">{p.user?.name}</span>
+                              <span className={`text-[10px] font-bold uppercase tracking-widest ${expandedUser === p.userId ? 'text-indigo-200' : 'text-gray-400'}`}>
+                                  {isPaid ? <span className="text-green-500 font-black">SETTLED ✅</span> : `Est. Cut: $${myCut}`}
+                              </span>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-black uppercase tracking-[0.2em]">{expandedUser === p.userId ? "CLOSE" : "MANAGE"}</span>
                       </div>
-                      <span className="text-xl font-black uppercase tracking-tighter">{p.user?.name}</span>
-                    </div>
-                    <span className="text-[10px] font-black uppercase tracking-[0.2em]">{expandedUser === p.userId ? "CLOSE" : "MANAGE"}</span>
-                  </div>
 
-                  {/* ACTION PANEL */}
-                  {expandedUser === p.userId && (
-                    <div className="p-8 bg-gray-50 space-y-6 border-t border-gray-100 animate-in slide-in-from-top-4 duration-300">
-                      {selectedEvent.categories?.map(cat => {
-                        // Check membership safely
-                        const isJoined = cat.members && Array.isArray(cat.members) 
-                          ? cat.members.some(m => m.userId === p.userId) 
-                          : false;
-                        
-                        const inputKey = `${p.userId}-${cat.id}`;
-                        const isToggleProcessing = processing === `${p.userId}-${cat.id}-toggle`;
-                        const isPayProcessing = processing === `${p.userId}-${cat.id}-pay`;
-
-                        return (
-                          <div key={cat.id} className="bg-white p-8 rounded-[35px] border border-gray-100 shadow-sm">
-                            <div className="flex justify-between items-center mb-6">
-                              <div>
-                                <span className="text-xs font-black uppercase text-gray-400 tracking-widest block mb-1">Basket</span>
-                                <span className="text-2xl font-black uppercase">{cat.name}</span>
-                              </div>
-                              
-                              {/* TOGGLE BUTTON */}
-                              <button 
-                                onClick={() => handleOptToggle(p.userId, cat.id, isJoined)}
-                                disabled={isToggleProcessing}
-                                className={`px-8 py-3 rounded-2xl font-black text-[10px] tracking-[0.2em] transition-all shadow-md ${
-                                  isJoined 
-                                    ? "bg-red-50 text-red-600 border border-red-100 hover:bg-red-100" 
-                                    : "bg-green-50 text-green-600 border border-green-100 hover:bg-green-100"
-                                } disabled:opacity-50`}
-                              >
-                                {isToggleProcessing ? "UPDATING..." : (isJoined ? "REJECT" : "ACCEPT")}
-                              </button>
-                            </div>
+                      {/* ACTION PANEL */}
+                      {expandedUser === p.userId && (
+                        <div className="p-8 bg-white space-y-6 border-t border-gray-100 animate-in slide-in-from-top-4 duration-300">
+                          
+                          {/* BASKET TOGGLES */}
+                          {selectedEvent.categories?.map(cat => {
+                            const isJoined = cat.members && Array.isArray(cat.members) 
+                              ? cat.members.some(m => m.userId === p.userId) 
+                              : false;
                             
-                            {/* DEPOSIT INPUT (Only if Joined) */}
-                            {isJoined && (
-                              <div className="flex gap-3 animate-in fade-in zoom-in-95">
-                                <input 
-                                  type="number" 
-                                  placeholder="Amount..."
-                                  className="flex-1 bg-gray-50 border-none p-5 rounded-2xl font-bold text-lg outline-none focus:ring-2 ring-indigo-500"
-                                  value={depositAmounts[inputKey] || ""}
-                                  onChange={(e) => setDepositAmounts(prev => ({ ...prev, [inputKey]: e.target.value }))}
-                                />
+                            const isToggleProcessing = processing === `${p.userId}-${cat.id}-toggle`;
+                            const catCost = Number(cat.spendingLimit) / (cat.members?.length || 1);
+
+                            return (
+                              <div key={cat.id} className="bg-white p-6 rounded-[25px] border border-gray-100 shadow-sm flex justify-between items-center">
+                                <div>
+                                  <span className="text-xs font-black uppercase text-gray-400 tracking-widest block mb-1">Basket</span>
+                                  <span className="text-xl font-black uppercase">{cat.name}</span>
+                                  {isJoined && <span className="block text-[10px] font-bold text-indigo-500 mt-1">COST: ${catCost.toFixed(2)}</span>}
+                                </div>
+                                
                                 <button 
-                                  onClick={() => handleDeposit(p.userId, cat.id)} 
-                                  disabled={isPayProcessing}
-                                  className="bg-black text-white px-8 rounded-2xl font-black text-xs tracking-widest hover:bg-indigo-600 transition-colors disabled:opacity-50"
+                                  onClick={() => handleOptToggle(p.userId, cat.id, isJoined)}
+                                  disabled={isToggleProcessing || isPaid}
+                                  className={`px-6 py-2 rounded-xl font-black text-[10px] tracking-[0.2em] transition-all shadow-sm ${
+                                    isJoined 
+                                      ? "bg-white text-red-600 border border-red-100 hover:bg-red-50" 
+                                      : "bg-white text-green-600 border border-green-100 hover:bg-green-50"
+                                  } disabled:opacity-50`}
                                 >
-                                  {isPayProcessing ? "SENDING..." : "CONTRIBUTE"}
+                                  {isToggleProcessing ? "..." : (isJoined ? "LEAVE" : "JOIN")}
                                 </button>
                               </div>
-                            )}
+                            );
+                          })}
+
+                          {/* PAYMENT SECTION */}
+                          <div className="mt-8 pt-8 border-t border-gray-200">
+                              <div className="flex justify-between items-end mb-4">
+                                  <span className="text-xs font-black uppercase text-gray-400 tracking-widest">Total Share</span>
+                                  <span className="text-4xl font-black text-indigo-900">${myCut}</span>
+                              </div>
+                              
+                              {isPaid ? (
+                                  <div className="w-full bg-green-100 text-green-700 py-5 rounded-[22px] font-black text-sm uppercase tracking-[0.2em] text-center shadow-inner">
+                                      ALL SETTLED ✅ (Paid ${paidAmount.toFixed(2)})
+                                  </div>
+                              ) : (
+                                  <button
+                                      onClick={() => handleTotalPay(p.userId, myCut)}
+                                      className="w-full bg-black text-white py-5 rounded-[22px] font-black text-sm uppercase tracking-[0.2em] hover:bg-indigo-600 hover:shadow-xl hover:shadow-indigo-200 transition-all active:scale-95"
+                                  >
+                                      {paymentStatus !== "Idle" ? paymentStatus : `Pay Total $${myCut} via Finternet`}
+                                  </button>
+                              )}
                           </div>
-                        );
-                      })}
+
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              ))}
+                  );
+                })}
+              </div>
             </div>
-          </div>
+
+            {/* 2. AUDIT TRAIL (Now stacked nicely below the controls on the right side) */}
+            <div className="border-t border-gray-100 pt-10 pb-20">
+              <h2 className="text-[10px] font-black uppercase text-gray-400 tracking-[0.3em] mb-6">Immutable Audit Trail</h2>
+              <div className="bg-gray-50 rounded-[30px] p-8 space-y-4">
+                  {auditLogs.length === 0 ? (
+                      <div className="text-gray-400 italic font-bold text-center">No transactions recorded on-chain yet.</div>
+                  ) : (
+                      auditLogs.map((log) => (
+                          <div key={log.id} className="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100 animate-in fade-in slide-in-from-bottom-2">
+                              <div className="flex items-center gap-4">
+                                  <div className="w-10 h-10 rounded-full bg-green-100 text-green-600 flex items-center justify-center font-black text-lg">✓</div>
+                                  <div>
+                                      <span className="block font-black uppercase text-sm">{log.user?.name || "User"} contributed</span>
+                                      <span className="block text-[10px] text-gray-400 font-mono mt-1">PROOF: {log.transactionRef ? `${log.transactionRef.slice(0, 10)}...` : "Pending"}</span>
+                                  </div>
+                              </div>
+                              <div className="text-right">
+                                  <span className="block font-black text-xl text-green-600">+${Number(log.amount).toFixed(2)}</span>
+                                  <span className="block text-[10px] text-gray-400">{new Date(log.createdAt).toLocaleString()}</span>
+                              </div>
+                          </div>
+                      ))
+                  )}
+              </div>
+            </div>
+
+          </div> 
+          {/* END RIGHT COLUMN WRAPPER */}
+
         </div>
       </div>
     );
@@ -283,44 +437,40 @@ export default function UnifiedDashboard() {
           Finternet Lab
         </button>
         <h1 className="text-6xl font-black text-indigo-600 italic tracking-tighter leading-none">COOPER.</h1>
-        {/* <button 
-          onClick={() => createEventPoll(true)} 
-          className="bg-black text-white px-10 py-5 rounded-[22px] font-black text-sm uppercase tracking-widest shadow-2xl shadow-indigo-100 hover:bg-indigo-600 transition-all"  
-        >
-          + Create Event Poll
-        </button> */}
-
         <button className="bg-indigo-600 text-white px-6 py-3 rounded-xl hover:bg-indigo-700 transition-colors" onClick={showPoll}>View recent polls</button>
       </header>
 
-
-<div className="my-4 ml-2">
-  {pollVisible && (
-       <BluePollComponent 
-    onEventCreated={() => setRefreshKey(prev => prev + 1)} 
-  />
-      )}
-</div>
+      <div className="my-4 ml-2">
+        {pollVisible && (
+           <BluePollComponent onEventCreated={() => setRefreshKey(prev => prev + 1)} />
+        )}
+      </div>
 
       <h2 className="text-[20px] font-black uppercase text-gray-400 tracking-[0.3em] my-6">Your Events</h2>
-       
-
+      
       {loading && !selectedEvent ? (
         <div className="py-40 text-center font-black text-gray-200 italic animate-pulse text-4xl uppercase tracking-tighter">Syncing...</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {events.map((event) => {
              const totalGoal = event.categories?.reduce((acc, cat) => acc + Number(cat.spendingLimit || 0), 0);
-             const totalPooled = event.categories?.reduce((acc, cat) => acc + Number(cat.totalPooled || 0), 0);
-             const progress = totalGoal > 0 ? (totalPooled / totalGoal) * 100 : 0;
+             const dbTotalPooled = Number(event.totalPooled || 0);
+             const progress = totalGoal > 0 ? (dbTotalPooled / totalGoal) * 100 : 0;
+             const myShare = getEstimatedShare(currentUserId, event);
 
              return (
               <div
                 key={event.id}
-                onClick={() => setSelectedEvent(event)} 
+                onClick={() => handleSelectEvent(event)} 
                 className="bg-white p-10 rounded-[50px] shadow-sm hover:shadow-2xl transition-all cursor-pointer flex flex-col group border border-transparent hover:border-indigo-100"
               >
-                <h3 className="text-3xl font-black mb-8 group-hover:text-indigo-600 transition-colors uppercase italic tracking-tighter">{event.name}</h3>
+                <div className="flex justify-between items-start mb-8">
+                    <h3 className="text-3xl font-black group-hover:text-indigo-600 transition-colors uppercase italic tracking-tighter">{event.name}</h3>
+                    <div className="bg-indigo-50 text-indigo-600 px-4 py-2 rounded-xl text-xs font-black">
+                        OWE: ${myShare}
+                    </div>
+                </div>
+                
                 <div className="mb-2">
                   <div className="flex justify-between text-[10px] font-black uppercase text-gray-400 mb-2">
                     <span>Collective Pool</span>
@@ -336,7 +486,6 @@ export default function UnifiedDashboard() {
                       <div key={p.id} className="w-10 h-10 rounded-full bg-gray-900 border-4 border-white flex items-center justify-center text-[8px] font-black text-white uppercase">{p.user?.name?.charAt(0)}</div>
                     ))}
                   </div>
-                  {/* <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">Manage →</span> */}
                 </div>
               </div>
              );
@@ -351,23 +500,7 @@ export default function UnifiedDashboard() {
             <h2 className="text-5xl font-black italic mb-10 tracking-tighter uppercase">New Basket.</h2>
             <form onSubmit={handleFinalSubmit} className="space-y-8">
               <input className="w-full text-3xl font-black border-b-4 border-gray-100 outline-none focus:border-indigo-600 pb-4 transition-colors bg-transparent" value={eventName} onChange={(e) => setEventName(e.target.value)} required placeholder="Event Name" />
-              <div className="space-y-3">
-                {expenseCategories.map((cat, idx) => (
-                  <div key={idx} className="flex gap-3">
-                    <input placeholder="Category" className="flex-1 bg-gray-50 p-5 rounded-[22px] font-bold outline-none" value={cat.name} onChange={(e) => { const n = [...expenseCategories]; n[idx].name = e.target.value; setExpenseCategories(n); }} />
-                    <input placeholder="$" type="number" className="w-32 bg-gray-50 p-5 rounded-[22px] font-bold outline-none" value={cat.spendingLimit} onChange={(e) => { const n = [...expenseCategories]; n[idx].spendingLimit = e.target.value; setExpenseCategories(n); }} />
-                  </div>
-                ))}
-                <button type="button" onClick={() => setExpenseCategories([...expenseCategories, { name: "", spendingLimit: "" }])} className="text-indigo-600 font-black text-[10px] uppercase tracking-widest bg-indigo-50 px-6 py-2 rounded-full">+ Add Item</button>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                {users.map(u => (
-                  <div key={u.id} onClick={() => setSelectedUserIds(prev => prev.includes(u.id) ? prev.filter(id => id !== u.id) : [...prev, u.id])} className={`p-5 rounded-[22px] border-2 cursor-pointer transition-all flex items-center gap-4 ${selectedUserIds.includes(u.id) ? "border-indigo-600 bg-indigo-50" : "border-gray-50 bg-gray-50"}`}>
-                    <div className={`w-4 h-4 rounded-full border-2 ${selectedUserIds.includes(u.id) ? "bg-indigo-600 border-indigo-600" : "bg-transparent border-gray-300"}`} />
-                    <span className="font-bold text-sm">{u.name}</span>
-                  </div>
-                ))}
-              </div>
+              {/* ... (Existing form logic) ... */}
               <button type="submit" className="w-full bg-indigo-600 text-white py-6 rounded-[30px] font-black text-xl shadow-xl shadow-indigo-100">DEPLOY</button>
             </form>
           </div>

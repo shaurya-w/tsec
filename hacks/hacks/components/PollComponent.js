@@ -4,7 +4,7 @@ export default function BluePollComponent({ onEventCreated }) {
   const [isLoading, setIsLoading] = useState(false);
   const currentUser = { id: "u1", name: "You", avatar: "Y" };
 
-  // --- HARDCODED MOCK DATA ---
+  // --- MOCK DATA (Kept same as yours) ---
   const [polls, setPolls] = useState([
     {
       id: "poll-1",
@@ -45,24 +45,46 @@ export default function BluePollComponent({ onEventCreated }) {
   ]);
 
   // --- ACTION: CREATE EVENT FROM POLL ---
+  // ... existing imports
+
+// Inside BluePollComponent ...
+
+  // --- ACTION: CREATE EVENT FROM POLL ---
   const createEventFromPoll = async () => {
     setIsLoading(true);
     try {
-      // 1. Extract all unique User IDs from the mock data
+      // 1. Extract All Participants (Anyone involved in any vote) to add to the main Event
       const allUserIds = new Set();
       polls.forEach(poll => {
         poll.votes.forEach(user => allUserIds.add(user.id));
       });
 
-      // 2. Prepare the payload
+      // 2. Create Categories with PRE-FILLED Members & Clean Cost
+      const dynamicCategories = polls.map(poll => {
+        // CLEAN COST: Remove non-numeric chars, ensure it defaults to 0 if empty
+        const cleanCost = poll.cost ? parseFloat(poll.cost.replace(/[^0-9.]/g, '')) : 0;
+
+        // GET MEMBERS: Only people who voted "ATTENDING" for this specific poll
+        const attendingUserIds = poll.votes
+          .filter(v => v.status === "ATTENDING")
+          .map(v => v.id);
+
+        return {
+          name: poll.name,
+          spendingLimit: cleanCost,
+          memberIds: attendingUserIds // <--- PASSING THE SPECIFIC MEMBERS
+        };
+      });
+
+      // 3. Prepare the payload
       const payload = {
-        name: "Goa Trip 🌴", // Hardcoded as requested
-        groupId: "g1",        // Hardcoded group
+        name: "Goa Trip 🌴", 
+        groupId: "g1", 
         selectedUserIds: Array.from(allUserIds),
-        categories: [{ name: "General Fund", spendingLimit: "0" }] // Default category
+        categories: dynamicCategories 
       };
 
-      // 3. Send Request
+      // 4. Send Request
       const res = await fetch("/api/create-event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -70,19 +92,17 @@ export default function BluePollComponent({ onEventCreated }) {
       });
 
       if (res.ok) {
-        alert("Event Created! Check the main dashboard.");
-        // Trigger the refresh in the parent component
         if (onEventCreated) onEventCreated();
       } else {
         alert("Failed to create event.");
       }
     } catch (err) {
       console.error(err);
-      alert("Event created!");
     } finally {
       setIsLoading(false);
     }
   };
+
 
   const handleVote = (pollId, type) => {
     setPolls(prevPolls => prevPolls.map(poll => {
@@ -176,7 +196,7 @@ export default function BluePollComponent({ onEventCreated }) {
           disabled={isLoading}
           className="bg-black text-white px-10 py-4 rounded-[22px] font-black text-xs uppercase tracking-widest shadow-xl hover:bg-indigo-600 hover:shadow-indigo-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {isLoading ? "Creating..." : "Create Event & View Analytics →"}
+          {isLoading ? "Finalizing Event..." : "Create Event & View Analytics →"}
         </button>
       </div>
     </div>
