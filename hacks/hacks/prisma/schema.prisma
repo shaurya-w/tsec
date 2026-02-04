@@ -1,0 +1,137 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+model ActionLog {
+  id         String   @id @default(cuid())
+  actionType String
+  cost       Float
+  createdAt  DateTime @default(now())
+}
+
+model User {
+  id                 String             @id @default(cuid())
+  email              String             @unique
+  name               String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  createdGroups      Group[]            @relation("GroupCreator")
+  groupMemberships   GroupMember[]
+
+  eventParticipations EventParticipant[]
+  transactions       Transaction[]
+  categoryOptIns     CategoryMember[]
+}
+
+model Group {
+  id        String   @id @default(cuid())
+  name      String
+  creatorId String
+  creator   User     @relation("GroupCreator", fields: [creatorId], references: id)
+
+  members   GroupMember[]
+  events    Event[]
+
+  createdAt DateTime @default(now())
+}
+
+model GroupMember {
+  id      String   @id @default(cuid())
+  userId  String
+  groupId String
+  role    String   @default("MEMBER")
+  joinedAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: id)
+  group Group @relation(fields: [groupId], references: id)
+
+  @@unique([userId, groupId])
+}
+
+model Event {
+  id           String             @id @default(cuid())
+  name         String
+  description  String?
+  groupId      String
+  group        Group              @relation(fields: [groupId], references: id)
+  totalPooled  Decimal            @default(0)
+  budgetGoal   Decimal            @default(0)
+  participants EventParticipant[]
+  categories   ExpenseCategory[]
+  transactions Transaction[]
+  createdAt    DateTime           @default(now())
+}
+
+model EventParticipant {
+  id      String @id @default(cuid())
+  userId  String
+  eventId String
+  user    User   @relation(fields: [userId], references: id)
+  event   Event  @relation(fields: [eventId], references: id)
+  role    String @default("PARTICIPANT")
+
+  @@unique([userId, eventId])
+}
+
+model Transaction {
+  id             String            @id @default(cuid())
+  amount         Decimal
+  status         TransactionStatus @default(PENDING)
+  transactionRef String?           @unique
+  userId         String
+  user           User              @relation(fields: [userId], references: id)
+  eventId        String
+  event          Event             @relation(fields: [eventId], references: id)
+  categoryId     String?
+  category       ExpenseCategory? @relation(fields: [categoryId], references: [id])
+
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+model ExpenseCategory {
+  id            String           @id @default(cuid())
+  name          String
+  eventId       String
+  event         Event            @relation(fields: [eventId], references: id)
+  spendingLimit Decimal?
+  totalPooled   Decimal          @default(0)
+  ruleType      String           @default("EQUAL_SPLIT")
+  members       CategoryMember[]
+  expenses      Expense[]
+  transactions  Transaction[]
+}
+
+model CategoryMember {
+  id                String          @id @default(cuid())
+  userId            String
+  expenseCategoryId String
+  user              User            @relation(fields: [userId], references: id)
+  category          ExpenseCategory @relation(fields: [expenseCategoryId], references: id)
+
+  @@unique([userId, expenseCategoryId])
+}
+
+model Expense {
+  id          String          @id @default(cuid())
+  amount      Decimal
+  description String
+  receiptUrl  String?
+  status      String          @default("PENDING")
+  categoryId  String
+  category    ExpenseCategory @relation(fields: [categoryId], references: id)
+  createdAt   DateTime        @default(now())
+}
