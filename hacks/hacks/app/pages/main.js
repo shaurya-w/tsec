@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 
 export default function UnifiedDashboard() {
@@ -7,7 +8,7 @@ export default function UnifiedDashboard() {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
   const [loading, setLoading] = useState(true);
-  
+  const router = useRouter();
   // UI State
   const [expandedUser, setExpandedUser] = useState(null); 
   const [depositAmounts, setDepositAmounts] = useState({}); 
@@ -132,7 +133,9 @@ export default function UnifiedDashboard() {
     const globalProgress = totalGoal > 0 ? (totalPooled / totalGoal) * 100 : 0;
 
     return (
+      
       <div className="min-h-screen bg-white p-10 text-gray-900 animate-in fade-in duration-300">
+        
         <button onClick={() => setSelectedEvent(null)} className="mb-8 font-black text-xs text-indigo-600 hover:underline tracking-widest">
           ← BACK TO FEED
         </button>
@@ -264,6 +267,12 @@ export default function UnifiedDashboard() {
   return (
     <div className="min-h-screen bg-gray-50 p-10 text-gray-900">
       <header className="flex justify-between items-center mb-16">
+        <button
+          onClick={() => router.push("../finternet")}
+          className="bg-black text-white px-6 py-3 rounded-xl"
+        >
+          Finternet Lab
+        </button>
         <h1 className="text-6xl font-black text-indigo-600 italic tracking-tighter leading-none">COOPER.</h1>
         <button 
           onClick={() => setIsCreatingEvent(true)} 
