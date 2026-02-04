@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
+import BluePollComponent from "../../components/PollComponent";
 
 export default function UnifiedDashboard() {
   const [events, setEvents] = useState([]);
@@ -10,9 +11,18 @@ export default function UnifiedDashboard() {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
   // UI State
+  const [pollVisible, setPollVisible] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0); // To refresh on new event
   const [expandedUser, setExpandedUser] = useState(null); 
-  const [depositAmounts, setDepositAmounts] = useState({}); 
-  const [processing, setProcessing] = useState(null); // To show loading spinner on buttons
+
+  const showPoll = () => {
+    setPollVisible(true);
+  };
+  
+  // NEW: State for the Poll Modal
+  const [isCreatingPoll, setIsCreatingPoll] = useState(false);
+  const [pollName, setPollName] = useState("");
+  const [pollBudget, setPollBudget] = useState("");
 
   const currentUserId = "u3"; 
 
@@ -144,9 +154,9 @@ export default function UnifiedDashboard() {
           
           {/* LEFT: COLLECTIVE HEALTH */}
           <div className="lg:col-span-5 border-r border-gray-100 pr-12 sticky top-10 h-fit">
-            <h1 className="text-7xl font-black italic uppercase tracking-tighter leading-none mb-12">{selectedEvent.name}</h1>
+            <h1 className="text-4xl font-black italic uppercase tracking-tighter leading-none mb-12">{selectedEvent.name}</h1>
             
-            <div className="mb-16">
+            <div className="mb-12">
               <div className="flex justify-between items-end mb-4">
                 <h2 className="text-[10px] font-black uppercase text-gray-400 tracking-[0.3em]">Collective Pool</h2>
                 <span className="text-5xl font-black text-indigo-600 tracking-tighter">{Math.round(globalProgress)}%</span>
@@ -187,10 +197,10 @@ export default function UnifiedDashboard() {
                     className={`p-8 flex justify-between items-center cursor-pointer transition-colors ${expandedUser === p.userId ? 'bg-indigo-600 text-white' : 'bg-white hover:bg-gray-50'}`}
                   >
                     <div className="flex items-center gap-6">
-                      <div className={`w-14 h-14 rounded-full flex items-center justify-center font-black text-xl border-2 ${expandedUser === p.userId ? 'bg-white text-indigo-600 border-white' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
+                      <div className={`w-14 h-10 rounded-full flex items-center justify-center font-black text-xl border-2 ${expandedUser === p.userId ? 'bg-white text-indigo-600 border-white' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
                         {p.user?.name?.charAt(0).toUpperCase()}
                       </div>
-                      <span className="text-2xl font-black uppercase tracking-tighter">{p.user?.name}</span>
+                      <span className="text-xl font-black uppercase tracking-tighter">{p.user?.name}</span>
                     </div>
                     <span className="text-[10px] font-black uppercase tracking-[0.2em]">{expandedUser === p.userId ? "CLOSE" : "MANAGE"}</span>
                   </div>
@@ -274,13 +284,27 @@ export default function UnifiedDashboard() {
           Finternet Lab
         </button>
         <h1 className="text-6xl font-black text-indigo-600 italic tracking-tighter leading-none">COOPER.</h1>
-        <button 
-          onClick={() => setIsCreatingEvent(true)} 
-          className="bg-black text-white px-10 py-5 rounded-[22px] font-black text-sm uppercase tracking-widest shadow-2xl shadow-indigo-100 hover:bg-indigo-600 transition-all"
+        {/* <button 
+          onClick={() => createEventPoll(true)} 
+          className="bg-black text-white px-10 py-5 rounded-[22px] font-black text-sm uppercase tracking-widest shadow-2xl shadow-indigo-100 hover:bg-indigo-600 transition-all"  
         >
-          + Create Basket
-        </button>
+          + Create Event Poll
+        </button> */}
+
+        <button className="bg-indigo-600 text-white px-6 py-3 rounded-xl hover:bg-indigo-700 transition-colors" onClick={showPoll}>View recent polls</button>
       </header>
+
+
+<div className="my-4 ml-2">
+  {pollVisible && (
+       <BluePollComponent 
+    onEventCreated={() => setRefreshKey(prev => prev + 1)} 
+  />
+      )}
+</div>
+
+      <h2 className="text-[20px] font-black uppercase text-gray-400 tracking-[0.3em] my-6">Your Events</h2>
+       
 
       {loading && !selectedEvent ? (
         <div className="py-40 text-center font-black text-gray-200 italic animate-pulse text-4xl uppercase tracking-tighter">Syncing...</div>
@@ -298,7 +322,7 @@ export default function UnifiedDashboard() {
                 className="bg-white p-10 rounded-[50px] shadow-sm hover:shadow-2xl transition-all cursor-pointer flex flex-col group border border-transparent hover:border-indigo-100"
               >
                 <h3 className="text-3xl font-black mb-8 group-hover:text-indigo-600 transition-colors uppercase italic tracking-tighter">{event.name}</h3>
-                <div className="mb-8">
+                <div className="mb-2">
                   <div className="flex justify-between text-[10px] font-black uppercase text-gray-400 mb-2">
                     <span>Collective Pool</span>
                     <span>{Math.round(progress)}%</span>
@@ -310,10 +334,10 @@ export default function UnifiedDashboard() {
                 <div className="mt-auto pt-8 border-t border-gray-50 flex items-center justify-between">
                   <div className="flex -space-x-3">
                     {event.participants?.map((p) => (
-                      <div key={p.id} className="w-10 h-10 rounded-full bg-gray-900 border-4 border-white flex items-center justify-center text-[10px] font-black text-white uppercase">{p.user?.name?.charAt(0)}</div>
+                      <div key={p.id} className="w-10 h-10 rounded-full bg-gray-900 border-4 border-white flex items-center justify-center text-[8px] font-black text-white uppercase">{p.user?.name?.charAt(0)}</div>
                     ))}
                   </div>
-                  <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">Manage →</span>
+                  {/* <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">Manage →</span> */}
                 </div>
               </div>
              );
