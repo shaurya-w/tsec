@@ -67,6 +67,7 @@ model EventParticipant {
   id      String @id @default(cuid())
   userId  String
   eventId String
+  individualShare Decimal  @default(0)
   role    String @default("PARTICIPANT")
   event   Event  @relation(fields: [eventId], references: [id])
   user    User   @relation(fields: [userId], references: [id])
