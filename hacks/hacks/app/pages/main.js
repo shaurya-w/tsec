@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import BluePollComponent from "../../components/PollComponent";
+import ReceiptScanner from "./ocr";
 
 export default function UnifiedDashboard() {
   const [events, setEvents] = useState([]);
@@ -367,7 +368,7 @@ export default function UnifiedDashboard() {
                 </div>
               </div>
             </div>
-
+            <ReceiptScanner/>
             {/* 2. REFUNDS */}
             <div className="bg-white p-8 rounded-[30px] shadow-sm">
               <h2 className="text-xs font-black uppercase text-gray-400 tracking-widest mb-6">Step 2: Refund Distribution</h2>
